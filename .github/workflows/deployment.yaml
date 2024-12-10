@@ -1,0 +1,66 @@
+name: Deploy and Test Application
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1 # Update with your region
+  ECR_REPO_NAME: my-app-repo # Update with your ECR repo name
+  KUBECONFIG_FILE: kubeconfig # Ensure your kubeconfig file is available as a secret
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Step 2: Log in to AWS
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v3
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      run: aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+    # Step 3: Build Docker Image
+    - name: Build Docker Image
+      run: |
+        docker-compose -f docker-compose.yml build
+        docker tag csv-files-reader-app:latest $GITHUB_SHA:latest
+
+    # Step 4: Push Docker Image to ECR
+    - name: Push Docker Image to ECR
+      run: |
+        docker push $GITHUB_SHA:latest
+
+    # Step 5: Deploy to Kubernetes using Helm
+    - name: Deploy to Kubernetes using Helm
+      env:
+        KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      run: |
+        helm upgrade --install my-app ./csv_chart \
+          --set image.repository=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO_NAME }} \
+          --set image.tag=latest
+
+  load-test:
+    runs-on: ubuntu-latest
+    needs: build-push-deploy
+
+    steps:
+    # Step 6: Checkout code for load testing
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Step 7: Perform Load Testing
+    - name: Perform Load Test
+      run: |
+        make load-test
